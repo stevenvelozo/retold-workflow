@@ -1,6 +1,6 @@
 {
 	"name": "retold-workflow",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Reusable, product-agnostic workflow capability for Retold, built on the fable-workflow engine. A workflow service, a built-in/clone type catalog with provenance and drift detection, and a Pict UI: a map/designer on pict-section-flow, a board, subject detail (timeline, metrics, agency), and a catalog picker. It depends on injected stores, a context resolver, and an API client, so it carries no opinion about a product's data model or persistence.",
 	"main": "source/Retold-Workflow.js",
 	"scripts": {
@@ -22,7 +22,7 @@
 		"fable-serviceproviderbase": "^3.0.19",
 		"fable-workflow": "^0.2.0",
 		"manyfest": "^1.0.49",
-		"pict-section-flow": "^1.0.1",
+		"pict-section-flow": "^1.1.0",
 		"pict-view": "^1.0.68"
 	},
 	"devDependencies": {
