@@ -24,9 +24,11 @@
 
 const libWorkflowTypeCatalog = require('./Workflow-Type-Catalog.js');
 const libWorkflowService = require('./Workflow-Service.js');
+const libBoardModel = require('./Board-Model.js');
 
 module.exports =
 {
 	WorkflowTypeCatalog: libWorkflowTypeCatalog,
-	WorkflowService: libWorkflowService
+	WorkflowService: libWorkflowService,
+	BoardModel: libBoardModel
 };
