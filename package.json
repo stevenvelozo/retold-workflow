@@ -1,0 +1,31 @@
+{
+	"name": "retold-workflow",
+	"version": "0.1.0",
+	"description": "Reusable, product-agnostic workflow capability for Retold, built on the fable-workflow engine. A workflow service, a built-in/clone type catalog with provenance and drift detection, and (in progress) board, timeline, metrics, and agency UI. It depends on injected stores and a context resolver, so it carries no opinion about a product's data model or persistence.",
+	"main": "source/Retold-Workflow.js",
+	"scripts": {
+		"test": "npx mocha -u tdd --exit --timeout 5000 test/*_tests.js",
+		"coverage": "npx nyc --reporter=lcov --reporter=text npm test"
+	},
+	"mocha": {
+		"ui": "tdd",
+		"reporter": "spec",
+		"timeout": "5000"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/fable-retold/retold-workflow.git"
+	},
+	"author": "steven velozo <steven@velozo.com>",
+	"license": "MIT",
+	"dependencies": {
+		"fable-serviceproviderbase": "^3.0.19",
+		"fable-workflow": "^0.2.0",
+		"manyfest": "^1.0.49"
+	},
+	"devDependencies": {
+		"fable": "^3.1.75",
+		"mocha": "^10.2.0",
+		"quackage": "^1.3.0"
+	}
+}
