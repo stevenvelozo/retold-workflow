@@ -25,10 +25,21 @@
 const libWorkflowTypeCatalog = require('./Workflow-Type-Catalog.js');
 const libWorkflowService = require('./Workflow-Service.js');
 const libBoardModel = require('./Board-Model.js');
+const libDefinitionFlow = require('./Definition-Flow.js');
+const libMetricsFormat = require('./Metrics-Format.js');
+const libWorkflowClient = require('./Workflow-Client.js');
 
+// The main entry stays node-safe: the engine-facing service and catalog, the pure cores (board
+// model, definition/flow marshaling, metrics formatting), and the isomorphic fetch client. None
+// of these pull in pict, so a product's server can require('retold-workflow') without dragging in
+// the browser layer. The Pict views and the StateCard live in ./Retold-Workflow-Views.js, which
+// does depend on pict-section-flow; a client bundle requires that entry instead.
 module.exports =
 {
 	WorkflowTypeCatalog: libWorkflowTypeCatalog,
 	WorkflowService: libWorkflowService,
-	BoardModel: libBoardModel
+	BoardModel: libBoardModel,
+	DefinitionFlow: libDefinitionFlow,
+	MetricsFormat: libMetricsFormat,
+	WorkflowClient: libWorkflowClient
 };

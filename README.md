@@ -23,7 +23,18 @@ return on one engine; this tier lets a whole product do the same.
 
 ## Status
 
-In progress. Phase 1 is in: the type catalog and the workflow service. The UI is next.
+The type catalog, the workflow service, and the UI are all in (0.2.0): a map/designer on
+pict-section-flow, a board, subject detail (timeline, metrics, agency), and a catalog picker,
+plus a reference API client the views render against.
+
+## Two entry points
+
+The package keeps the server clean. The main entry (`require('retold-workflow')`) is node-safe:
+the workflow service, the type catalog, the board model, the definition/flow marshaling, the
+metrics formatter, and the fetch client. None of it pulls in pict, so a product's server uses it
+without dragging in the browser layer. The Pict views and the StateCard live behind a second
+entry (`require('retold-workflow/source/Retold-Workflow-Views.js')`), which depends on
+pict-section-flow; a product's client bundle requires that one.
 
 ## The type catalog
 
@@ -99,7 +110,53 @@ await tmpService.whatCanAdvance(actor);          // which subjects this actor ca
 The product implements the stores over its own schema and the resolvers over its own data.
 retold-workflow names none of it.
 
+## The UI
+
+Four Pict views render workflows from data and call an injected API client. They name no
+product entity; point the client at a product's routes and the same views work anywhere.
+
+- **Map / designer** (`WorkflowMapView`) on pict-section-flow: states are nodes (a `StateCard`,
+  colored by lane), transitions are connections, and an inspector edits the selected state
+  (Name, Lane, Marker, IsInitial, IsTerminal) or transition (RequiresEntitlement, ActorAddress,
+  a structured guard). The graph is the definition: it reads back with From and To taken from the
+  wires. A built-in opens read-only and offers to adopt before editing. Before a save, the
+  assembled definition runs through the engine's own `defineWorkflow` checks; a failure is shown,
+  not persisted.
+- **Board** (`WorkflowBoardView`) over the board model: one column per lane, each subject in the
+  lane of its current state, many-to-one so two states share a lane and a move within it only
+  re-badges the card. Advancing calls the client; a blocked move shows the reason in a modal.
+- **Subject detail** (`WorkflowSubjectView`): the event log as a timeline, the folded metrics as
+  figures and per-state bars, and who can act now.
+- **Catalog / picker** (`WorkflowCatalogView`): built-ins (labeled) plus the tenant's own types,
+  with adopt and a drift note when a clone's source built-in has advanced. The entry point to the
+  rest.
+
+The pure cores behind them are testable on their own: `DefinitionFlow.definitionToFlow` /
+`flowToDefinition` (with `validateDefinition`), `BoardModel.buildBoardModel`, and
+`MetricsFormat.summarizeMetrics`.
+
+### The API client
+
+`WorkflowClient` is a thin fetch wrapper a product hands to the views (or copies). It hits the
+standard routes under a configurable base path with a configurable auth header:
+
+```javascript
+const { WorkflowClient } = require('retold-workflow');
+
+let tmpClient = new WorkflowClient({ BasePath: '/1.0/Workflow', Credentials: 'same-origin' });
+// getTypes / getType / adoptType / saveType / getBoard / getLayout / saveLayout
+// open / advance / reevaluate / getSubject / getTimeline / getMetrics / getAgency
+```
+
+Each view takes the client as `options.Client` (an object) or finds it by provider name
+(`options.ClientProvider`, default `'WorkflowAPI'`). A product whose routes match (plansheet's
+`/1.0/Workflow` do) passes one of these and is done.
+
 ## Test
+
+`npm test` covers the pure cores: the board model, the definition/flow round trip, the metrics
+formatter, the client (against a fake fetch), the type catalog, and the service. The views are
+verified in a host app (plansheet) through the browser.
 
 ```
 npm test
