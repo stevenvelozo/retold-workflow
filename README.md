@@ -115,13 +115,15 @@ retold-workflow names none of it.
 Four Pict views render workflows from data and call an injected API client. They name no
 product entity; point the client at a product's routes and the same views work anywhere.
 
-- **Map / designer** (`WorkflowMapView`) on pict-section-flow: states are nodes (a `StateCard`,
-  colored by lane), transitions are connections, and an inspector edits the selected state
-  (Name, Lane, Marker, IsInitial, IsTerminal) or transition (RequiresEntitlement, ActorAddress,
-  a structured guard). The graph is the definition: it reads back with From and To taken from the
-  wires. A built-in opens read-only and offers to adopt before editing. Before a save, the
-  assembled definition runs through the engine's own `defineWorkflow` checks; a failure is shown,
-  not persisted.
+- **Map / designer** (`WorkflowMapView`) on pict-section-flow: both states and transitions are
+  cards. A state is a `StateCard` colored by lane; a transition is a `TransitionCard` between two
+  states, wired Status -> transition -> Status, styled as a muted connector titled with the gate it
+  enforces. Editing is on the graph (double-click a card): a state's Name, Lane, Marker, IsInitial,
+  IsTerminal; a transition's RequiresEntitlement, ActorAddress, and Guard. The graph is the
+  definition: it reads back with each transition's From and To taken from the edges around its card.
+  A built-in opens read-only and offers to adopt before editing. Before a save, the assembled
+  definition runs through the engine's own `defineWorkflow` checks; a failure is shown, not
+  persisted.
 - **Board** (`WorkflowBoardView`) over the board model: one column per lane, each subject in the
   lane of its current state, many-to-one so two states share a lane and a move within it only
   re-badges the card. Advancing calls the client; a blocked move shows the reason in a modal.

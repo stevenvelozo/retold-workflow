@@ -3,22 +3,20 @@
 /**
  * Workflow map / designer.
  *
- * The centerpiece: a workflow definition rendered as a node-and-edge graph on pict-section-flow.
- * States are nodes (a StateCard, colored by lane), transitions are connections. Editing happens on
- * the graph: double-click a state to open its properties panel (Name, Lane, Marker, IsInitial,
- * IsTerminal); double-click a transition to open its panel (RequiresEntitlement, ActorAddress, and
- * a structured Guard as JSON). Both are pict-section-flow on-graph panels; the transition panel is
- * a connection (edge) panel, the feature pict-section-flow gained for this. The graph is the
- * definition: reading it back (flowToDefinition) takes From and To from the wires.
+ * The centerpiece: a workflow definition rendered as a graph where both states and transitions are
+ * cards. A state is a StateCard (colored by lane); a transition is a TransitionCard sitting between
+ * two states, wired Status -> transition -> Status, styled as a muted connector with the gate it
+ * enforces as its title. Editing happens on the graph: double-click a state for its panel (Name,
+ * Lane, Marker, IsInitial, IsTerminal); double-click a transition for its panel (RequiresEntitlement,
+ * ActorAddress, Guard). Both are ordinary node panels. The graph is the definition: reading it back
+ * (flowToDefinition) takes each transition's From and To from the edges around its card.
  *
  * Built-in (platform) types open read-only; the first move to edit one offers to adopt it (clone
  * into the tenant) and edits the clone. Before a save, the assembled definition runs through the
- * engine's own defineWorkflow checks, and a failure is shown rather than persisted. Node positions
- * save and restore as a per-type layout through the client; positions are not part of the
- * definition.
- *
- * Everything talks to an injected client (the WorkflowClient shape). The host supplies it as
- * options.Client (an object) or names a provider in options.ClientProvider (default 'WorkflowAPI').
+ * engine's own defineWorkflow checks, and a failure is shown rather than persisted. State positions
+ * save and restore as a per-type layout through the client; transition cards center themselves
+ * between their states. Everything talks to an injected client (the WorkflowClient shape), supplied
+ * as options.Client or named by options.ClientProvider (default 'WorkflowAPI').
  *
  * @author Steven Velozo <steven@velozo.com>
  * @license MIT
@@ -28,6 +26,26 @@ const libPictView = require('pict-view');
 const libPictSectionFlow = require('pict-section-flow');
 const libDefinitionFlow = require('../Definition-Flow.js');
 const libStateCard = require('../cards/State-Card.js');
+const libTransitionCard = require('../cards/Transition-Card.js');
+
+// Title-bar glyphs for the two kinds, registered on the flow's icon provider. They stroke with the
+// theme's panel color so they match the white title text on the colored title bars and follow the
+// theme. The {FlowIconSize} placeholder is the flow icon provider's size token. A State reads as a
+// box with a center point; a Transition as a forward arrow (a move).
+const _STATE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="{FlowIconSize}" height="{FlowIconSize}" viewBox="0 0 24 24" fill="none" stroke="var(--theme-color-background-panel, #ffffff)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3.5"/><circle cx="12" cy="12" r="1.6" fill="var(--theme-color-background-panel, #ffffff)" stroke="none"/></svg>';
+const _TRANSITION_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="{FlowIconSize}" height="{FlowIconSize}" viewBox="0 0 24 24" fill="none" stroke="var(--theme-color-background-panel, #ffffff)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h12.5"/><path d="M12 5.5l7 6.5-7 6.5"/></svg>';
+
+// The arrange menu. 'workflow' is the bespoke, workflow-aware stairstep (states from the initial
+// one, alternating two rows, each state's transitions to its right); the rest dispatch to
+// pict-section-flow's own layout algorithms by name so the same graph can be tried a few ways.
+const _LAYOUT_CHOICES =
+[
+	{ Value: 'workflow',  Label: 'Workflow stairstep', Algorithm: null },
+	{ Value: 'Staggered', Label: 'Stairstep (compact)', Algorithm: 'Staggered' },
+	{ Value: 'Layered',   Label: 'Layered rows',        Algorithm: 'Layered' },
+	{ Value: 'Grid',      Label: 'Grid',                Algorithm: 'Grid' },
+	{ Value: 'Circular',  Label: 'Circular',            Algorithm: 'Circular' }
+];
 
 const _ViewConfiguration =
 {
@@ -51,6 +69,10 @@ const _ViewConfiguration =
 		.wfmap-btn-primary:hover { filter: brightness(1.05); }
 		.wfmap-readonly-note { font-size: 0.82em; color: var(--theme-color-text-secondary, #888); }
 		.wfmap-hint { font-size: 0.82em; color: var(--theme-color-text-secondary, #888); margin-left: 0.5em; }
+		.wfmap-arrange { display: inline-flex; align-items: center; gap: 0.4em; }
+		.wfmap-arrange-label { font-size: 0.82em; color: var(--theme-color-text-secondary, #888); }
+		.wfmap-select { padding: 0.4em 0.6em; border: 1px solid var(--theme-color-border-default, #ccc); border-radius: 5px; background: var(--theme-color-background-panel, #fff); color: var(--theme-color-text-primary, #222); cursor: pointer; font-size: 0.9em; }
+		.wfmap-select:hover { background: var(--theme-color-background-hover, #f2f2f2); }
 		.wfmap-flow { flex: 1; min-height: 520px; border: 1px solid var(--theme-color-border-light, #e3e3e3); border-radius: 6px; overflow: hidden; }
 		.wfmap-banner { flex-shrink: 0; }
 		.wfmap-errors { margin: 0.5em 0 0; padding: 0.5em 0.75em; border-radius: 5px; background: var(--theme-color-status-error-background, #fdecea); border: 1px solid var(--theme-color-status-error, #e74c3c); color: var(--theme-color-status-error, #c0392b); font-size: 0.85em; }
@@ -66,6 +88,10 @@ const _ViewConfiguration =
 		.wfp-check { display: flex; align-items: center; gap: 0.4em; font-size: 0.85em; }
 		.wfp-check input { margin: 0; }
 		.wfp-transition-head { font-weight: 600; font-size: 0.9em; margin-bottom: 0.2em; }
+
+		/* Always show the kind eyebrow ("STATE" / "TRANSITION"); the flow hides it until hover. The
+		   extra class specificity wins over the flow's default without !important. */
+		.pict-flow-node .pict-flow-node-type-label { opacity: 1; }
 	`,
 
 	Templates:
@@ -85,6 +111,7 @@ const _ViewConfiguration =
 </div>`
 		},
 		{ Hash: 'Workflow-Map-Option', Template: /*html*/`<option value="{~D:Record.Value~}"></option>` },
+			{ Hash: 'Workflow-Map-Layout-Option', Template: /*html*/`<option value="{~D:Record.Value~}" {~NE:Record.Selected^selected~}>{~D:Record.Label~}</option>` },
 		{
 			Hash: 'Workflow-Map-Toolbar',
 			Template: /*html*/`
@@ -96,18 +123,21 @@ const _ViewConfiguration =
 			Template: /*html*/`
 <span class="wfmap-readonly-note">Built-in, read-only.</span>
 <button class="wfmap-btn wfmap-btn-primary" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].adopt()">Adopt to edit</button>
-<button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].autoArrange()">Auto-arrange</button>
+<label class="wfmap-arrange"><span class="wfmap-arrange-label">Arrange</span><select class="wfmap-select" onchange="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].applyNamedLayout(this.value)">{~TS:Workflow-Map-Layout-Option:AppData.WorkflowMap.LayoutOptions~}</select></label>
+<button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].toggleExpanded()">{~D:AppData.WorkflowMap.ExpandLabel~}</button>
 <span class="wfmap-hint">Double-click a state or transition to inspect it.</span>`
 		},
 		{
 			Hash: 'Workflow-Map-Toolbar-Edit',
 			Template: /*html*/`
 <button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].addState()">Add state</button>
+<button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].addTransition()">Add transition</button>
 <button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].deleteSelected()">Delete selected</button>
-<button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].autoArrange()">Auto-arrange</button>
+<label class="wfmap-arrange"><span class="wfmap-arrange-label">Arrange</span><select class="wfmap-select" onchange="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].applyNamedLayout(this.value)">{~TS:Workflow-Map-Layout-Option:AppData.WorkflowMap.LayoutOptions~}</select></label>
+<button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].toggleExpanded()">{~D:AppData.WorkflowMap.ExpandLabel~}</button>
 <button class="wfmap-btn" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].saveCurrentLayout()">Save layout</button>
 <button class="wfmap-btn wfmap-btn-primary" onclick="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].save()">Save workflow</button>
-<span class="wfmap-hint">Double-click a state or transition to edit it. Drag a state's right port to another's left port to add a transition.</span>`
+<span class="wfmap-hint">Double-click a card to edit it. Wire a transition: drag a state's right port to the transition's In, and its Out to the next state's left port.</span>`
 		},
 		{
 			Hash: 'Workflow-Map-Banner',
@@ -127,33 +157,6 @@ const _ViewConfiguration =
 	[
 		{ RenderableHash: 'Workflow-Map-Container', TemplateHash: 'Workflow-Map-Container', DestinationAddress: '#Workflow-Map-Container', RenderMethod: 'replace' }
 	]
-};
-
-// The on-graph editor for a transition (a connection / edge panel). Registered on the embedded
-// flow view as its ConnectionPropertiesPanel; the inputs call back into this map view by hash.
-const _TRANSITION_PANEL =
-{
-	PanelType: 'Template',
-	DefaultWidth: 300,
-	DefaultHeight: 280,
-	Title: 'Transition',
-	Configuration:
-	{
-		TemplateHash: 'Workflow-Transition-Panel',
-		Templates:
-		[
-			{
-				Hash: 'Workflow-Transition-Panel',
-				Template: /*html*/`
-<div class="wfp">
-	<div class="wfp-transition-head">{~D:Record.Data._FromName~} to {~D:Record.Data._ToName~}</div>
-	<div class="wfp-field"><label class="wfp-label">Requires entitlement</label><input type="text" class="wfp-input" list="WFMap-Entitlements" value="{~D:Record.Data.RequiresEntitlement~}" {~D:AppData.WorkflowMap.DisabledAttr~} oninput="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].editTransition('{~D:Record.Hash~}','RequiresEntitlement',this.value)"></div>
-	<div class="wfp-field"><label class="wfp-label">Actor address</label><input type="text" class="wfp-input" value="{~D:Record.Data.ActorAddress~}" {~D:AppData.WorkflowMap.DisabledAttr~} oninput="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].editTransition('{~D:Record.Hash~}','ActorAddress',this.value)"></div>
-	<div class="wfp-field"><label class="wfp-label">Guard (JSON, blank for none)</label><textarea class="wfp-input wfp-textarea" {~D:AppData.WorkflowMap.DisabledAttr~} oninput="_Pict.views['{~D:AppData.WorkflowMap.ViewID~}'].editTransitionGuard('{~D:Record.Hash~}',this.value)">{~D:Record.Data._GuardText~}</textarea></div>
-</div>`
-			}
-		]
-	}
 };
 
 class PictViewWorkflowMap extends libPictView
@@ -187,10 +190,26 @@ class PictViewWorkflowMap extends libPictView
 				ViewSlot: [], EditSlot: [],
 				ErrorSlot: [], StatusSlot: [], Errors: [],
 				LaneOptions: [],
-				EntitlementOptions: []
+				EntitlementOptions: [],
+				Expanded: false,
+				ExpandLabel: 'Show details',
+				LayoutChoice: 'workflow',
+				LayoutOptions: []
 			};
 		}
 		this.pict.AppData.WorkflowMap.ViewID = this.options.ViewIdentifier;
+		this._refreshLayoutOptions();
+	}
+
+	/**
+	 * Rebuild the arrange-menu option list, flagging the active choice as selected so the dropdown
+	 * keeps showing the last-applied layout across toolbar re-renders.
+	 */
+	_refreshLayoutOptions()
+	{
+		let tmpChoice = this._state().LayoutChoice || 'workflow';
+		this._state().LayoutOptions = _LAYOUT_CHOICES.map(
+			(pChoice) => ({ Value: pChoice.Value, Label: pChoice.Label, Selected: (pChoice.Value === tmpChoice) }));
 	}
 
 	_state() { return this.pict.AppData.WorkflowMap; }
@@ -262,8 +281,12 @@ class PictViewWorkflowMap extends libPictView
 		let tmpContainer = '#WFMap-Flow-' + tmpID;
 		if (!this._FlowView)
 		{
-			let tmpStateCard = new libStateCard(this.fable, {}, 'Workflow-StateCard');
-			let tmpNodeTypes = {}; let tmpConfig = tmpStateCard.getNodeTypeConfiguration(); tmpNodeTypes[tmpConfig.Hash] = tmpConfig;
+			let tmpNodeTypes = {};
+			[ new libStateCard(this.fable, {}, 'Workflow-StateCard'), new libTransitionCard(this.fable, {}, 'Workflow-TransitionCard') ].forEach((pCard) =>
+			{
+				let tmpConfig = pCard.getNodeTypeConfiguration();
+				tmpNodeTypes[tmpConfig.Hash] = tmpConfig;
+			});
 
 			this._FlowView = this.pict.addView('Workflow-Flow-' + tmpID,
 				{
@@ -277,14 +300,29 @@ class PictViewWorkflowMap extends libPictView
 					IncludeDefaultNodeTypes: false,
 					DefaultNodeType: libDefinitionFlow.STATE_NODE_TYPE,
 					NodeTypes: tmpNodeTypes,
-					ConnectionPropertiesPanel: _TRANSITION_PANEL,
+					// Connections attach to the perimeter point nearest the other card, so an edge
+					// leaves a state from the side that faces its transition rather than a fixed port.
+					DefaultEdgeTheme: 'Perimeter',
 					Renderables: [ { RenderableHash: 'Flow-Container', TemplateHash: 'Flow-Container-Template', DestinationAddress: tmpContainer, RenderMethod: 'replace' } ]
 				},
 				libPictSectionFlow);
 		}
 		this._FlowView.initialRenderComplete = false;
 		this._FlowView.render();
+		this._registerCardIcons();
 		this._wireFlowEvents();
+	}
+
+	// Register the State/Transition title-bar glyphs on the flow's icon provider (once). Done after
+	// the flow renders so the provider exists, and before any nodes load so the glyphs are available.
+	_registerCardIcons()
+	{
+		if (this._IconsRegistered) { return; }
+		let tmpIconProvider = this._FlowView && this._FlowView._IconProvider;
+		if (!tmpIconProvider || typeof tmpIconProvider.registerIcon !== 'function') { return; }
+		tmpIconProvider.registerIcon('WorkflowState', _STATE_ICON);
+		tmpIconProvider.registerIcon('WorkflowTransition', _TRANSITION_ICON);
+		this._IconsRegistered = true;
 	}
 
 	_wireFlowEvents()
@@ -294,9 +332,10 @@ class PictViewWorkflowMap extends libPictView
 		this._FlowEventsWired = true;
 		tmpEvents.registerHandler('onFlowChanged', () => this._markDirty());
 		tmpEvents.registerHandler('onNodeMoved', () => this._markDirty());
-		tmpEvents.registerHandler('onConnectionCreated', () => { this._markDirty(); this._stampConnectionDisplayFields(); this._refreshOptionLists(); });
-		// A panel edits the underlying node/connection live; on close, repaint so a renamed or
-		// re-laned state shows its new title and color, and refresh the autocomplete lists.
+		// Wiring a transition card changes which states it joins, so re-stamp its From/To labels.
+		tmpEvents.registerHandler('onConnectionCreated', () => { this._markDirty(); this._stampTransitionDisplayFields(); this._refreshOptionLists(); });
+		// A panel edits the underlying node live; on close, repaint so a renamed/re-laned state and
+		// a re-gated transition show their new title and color, and refresh the autocomplete lists.
 		tmpEvents.registerHandler('onPanelClosed', () => this._afterPanelEdit());
 	}
 
@@ -304,8 +343,10 @@ class PictViewWorkflowMap extends libPictView
 	{
 		let tmpFlow = libDefinitionFlow.definitionToFlow(pDefinition, pLayout || {});
 		this._FlowView.setFlowData({ Nodes: tmpFlow.Nodes, Connections: tmpFlow.Connections });
-		this._stampConnectionDisplayFields();
+		this._stampTransitionDisplayFields();
 		this._refreshOptionLists();
+		// With no saved arrangement, lay it out staggered so it reads instead of bunching.
+		if (!pLayout || Object.keys(pLayout).length === 0) { this._staggeredLayout(); }
 	}
 
 	_applyMode()
@@ -323,7 +364,7 @@ class PictViewWorkflowMap extends libPictView
 		}
 	}
 
-	// -- editing (called from the on-graph panels, by hash) --------------------
+	// -- editing (called from the on-graph panels, by node hash) ---------------
 
 	editState(pHash, pField, pValue)
 	{
@@ -338,16 +379,16 @@ class PictViewWorkflowMap extends libPictView
 	editTransition(pHash, pField, pValue)
 	{
 		if (this._state().Mode !== 'edit') { return; }
-		let tmpConnection = this._FlowView.getConnection(pHash); if (!tmpConnection) { return; }
-		if (pValue) { tmpConnection.Data[pField] = pValue; } else { delete tmpConnection.Data[pField]; }
+		let tmpNode = this._FlowView.getNode(pHash); if (!tmpNode) { return; }
+		if (pValue) { tmpNode.Data[pField] = pValue; } else { delete tmpNode.Data[pField]; }
 		this._markDirty();
 	}
 
 	editTransitionGuard(pHash, pValue)
 	{
 		if (this._state().Mode !== 'edit') { return; }
-		let tmpConnection = this._FlowView.getConnection(pHash); if (!tmpConnection) { return; }
-		tmpConnection.Data._GuardText = pValue;
+		let tmpNode = this._FlowView.getNode(pHash); if (!tmpNode) { return; }
+		tmpNode.Data._GuardText = pValue;
 		this._markDirty();
 	}
 
@@ -361,20 +402,179 @@ class PictViewWorkflowMap extends libPictView
 		if (tmpNode) { this._FlowView.selectNode(tmpNode.Hash); }
 	}
 
+	addTransition()
+	{
+		if (this._state().Mode !== 'edit') { return; }
+		let tmpNode = this._FlowView.addNode(libDefinitionFlow.TRANSITION_NODE_TYPE, 200, 200, 'open', {});
+		this._markDirty();
+		if (tmpNode) { this._FlowView.selectNode(tmpNode.Hash); }
+	}
+
 	deleteSelected()
 	{
 		if (this._state().Mode !== 'edit') { return; }
 		this._FlowView.deleteSelected();
-		this._stampConnectionDisplayFields();
+		this._stampTransitionDisplayFields();
 		this._refreshOptionLists();
 		this._markDirty();
 	}
 
 	autoArrange()
 	{
-		if (!this._FlowView) { return; }
-		this._FlowView.autoLayout();
+		this.applyNamedLayout(this._state().LayoutChoice || 'workflow');
+	}
+
+	/**
+	 * Apply a layout from the arrange menu. 'workflow' runs the bespoke, workflow-aware stairstep;
+	 * any other value is the name of a pict-section-flow layout algorithm, run over the whole graph
+	 * and framed with zoom-to-fit. Either way the new positions are dirty until the layout is saved.
+	 */
+	applyNamedLayout(pChoice)
+	{
+		let tmpChoice = pChoice || 'workflow';
+		this._state().LayoutChoice = tmpChoice;
+		this._refreshLayoutOptions();
+
+		let tmpEntry = _LAYOUT_CHOICES.find((pEntry) => pEntry.Value === tmpChoice);
+		if (!tmpEntry || !tmpEntry.Algorithm)
+		{
+			this._staggeredLayout();
+		}
+		else if (this._FlowView)
+		{
+			this._FlowView.autoLayout(tmpEntry.Algorithm);
+			if (typeof this._FlowView.zoomToFit === 'function') { this._FlowView.zoomToFit(); }
+		}
+
 		this._markDirty();
+		this._renderToolbar();
+	}
+
+	/**
+	 * A workflow-aware staggered layout: walk the states from the initial one (breadth first), lay
+	 * them left to right, and alternate each between two rows so the chain stair-steps and uses
+	 * vertical space instead of one long line. Each state's outgoing transition cards sit just to its
+	 * right, on its row, stacking when a state has several. The generic layered algorithm collapses
+	 * on a workflow's branches and cycles, which is why this is bespoke.
+	 */
+	_staggeredLayout()
+	{
+		if (!this._FlowView) { return; }
+		let tmpNodes = this._FlowView.flowData.Nodes || [];
+		let tmpConnections = this._FlowView.flowData.Connections || [];
+		let tmpTransitionType = libDefinitionFlow.TRANSITION_NODE_TYPE;
+
+		let tmpNodeByHash = {};
+		let tmpIsTransition = {};
+		tmpNodes.forEach((pNode) => { tmpNodeByHash[pNode.Hash] = pNode; if (pNode.Type === tmpTransitionType) { tmpIsTransition[pNode.Hash] = true; } });
+
+		// Each transition card's source and target state, from the edges around it.
+		let tmpSourceOf = {};
+		let tmpTargetOf = {};
+		tmpConnections.forEach((pConnection) =>
+		{
+			if (tmpIsTransition[pConnection.TargetNodeHash]) { tmpSourceOf[pConnection.TargetNodeHash] = pConnection.SourceNodeHash; }
+			if (tmpIsTransition[pConnection.SourceNodeHash]) { tmpTargetOf[pConnection.SourceNodeHash] = pConnection.TargetNodeHash; }
+		});
+
+		// state hash -> [{ transition node, target state hash }]
+		let tmpAdjacency = {};
+		tmpNodes.forEach((pNode) => { if (pNode.Type !== tmpTransitionType) { tmpAdjacency[pNode.Hash] = []; } });
+		tmpNodes.forEach((pNode) =>
+		{
+			if (pNode.Type !== tmpTransitionType) { return; }
+			let tmpSource = tmpSourceOf[pNode.Hash];
+			if (tmpSource != null && tmpAdjacency[tmpSource]) { tmpAdjacency[tmpSource].push({ Transition: pNode, Target: tmpTargetOf[pNode.Hash] }); }
+		});
+
+		// Breadth-first order of the states from the initial state.
+		let tmpStateNodes = tmpNodes.filter((pNode) => pNode.Type !== tmpTransitionType);
+		let tmpInitial = tmpStateNodes.find((pNode) => pNode.Data && pNode.Data.IsInitial) || tmpStateNodes[0];
+		let tmpOrder = [];
+		let tmpSeen = {};
+		let tmpQueue = tmpInitial ? [tmpInitial.Hash] : tmpStateNodes.map((pNode) => pNode.Hash);
+		while (tmpQueue.length)
+		{
+			let tmpHash = tmpQueue.shift();
+			if (tmpSeen[tmpHash]) { continue; }
+			tmpSeen[tmpHash] = true;
+			tmpOrder.push(tmpHash);
+			(tmpAdjacency[tmpHash] || []).forEach((pEdge) => { if (pEdge.Target != null && !tmpSeen[pEdge.Target]) { tmpQueue.push(pEdge.Target); } });
+		}
+		tmpStateNodes.forEach((pNode) => { if (!tmpSeen[pNode.Hash]) { tmpSeen[pNode.Hash] = true; tmpOrder.push(pNode.Hash); } });
+
+		// Place states left to right, alternating two rows; place each state's transitions to its right.
+		// The column and row steps leave room for a state's transition stack plus the edges that route
+		// around a hub state (one that several transitions point back into). A state's transitions are
+		// centered on the state's own vertical center, not hung downward from its top, so a two- or
+		// three-way fan-out straddles the state and stays clear of the other row.
+		let tmpColumnStep = 460;
+		let tmpRowStep = 260;
+		let tmpStartX = 60;
+		let tmpStartY = 100;
+		let tmpTransitionGap = 44;
+		tmpOrder.forEach((pHash, pIndex) =>
+		{
+			let tmpNode = tmpNodeByHash[pHash];
+			if (!tmpNode) { return; }
+			let tmpRow = pIndex % 2;
+			tmpNode.X = tmpStartX + pIndex * tmpColumnStep;
+			tmpNode.Y = tmpStartY + tmpRow * tmpRowStep;
+
+			let tmpEdges = tmpAdjacency[pHash] || [];
+			let tmpStateCenter = tmpNode.Y + (tmpNode.Height || 70) / 2;
+			tmpEdges.forEach((pEdge, pEdgeIndex) =>
+			{
+				let tmpTransition = pEdge.Transition;
+				let tmpTransitionHeight = tmpTransition.Height || 64;
+				let tmpPitch = tmpTransitionHeight + 30;
+				tmpTransition.X = tmpNode.X + (tmpNode.Width || 190) + tmpTransitionGap;
+				tmpTransition.Y = (tmpStateCenter - (tmpTransitionHeight / 2)) + ((pEdgeIndex - ((tmpEdges.length - 1) / 2)) * tmpPitch);
+			});
+		});
+
+		this._FlowView.renderFlow();
+		if (typeof this._FlowView.zoomToFit === 'function') { this._FlowView.zoomToFit(); }
+	}
+
+	/**
+	 * The expanded view: open every card's panel and place it clear of the graph (panels for the
+	 * upper row go above their card, lower-row panels go below), so the flow can be read terse
+	 * (cards only) or in full (every gate and field visible, proximal to its card). Toggles closed.
+	 */
+	toggleExpanded()
+	{
+		let tmpState = this._state();
+		if (tmpState.Expanded) { this._closeAllPanels(); tmpState.Expanded = false; tmpState.ExpandLabel = 'Show details'; }
+		else { this._openAllPanels(); tmpState.Expanded = true; tmpState.ExpandLabel = 'Hide details'; }
+		this._renderToolbar();
+	}
+
+	_openAllPanels()
+	{
+		if (!this._FlowView) { return; }
+		let tmpNodes = (this._FlowView.flowData.Nodes || []).slice();
+		if (!tmpNodes.length) { return; }
+		let tmpYs = tmpNodes.map((pNode) => pNode.Y);
+		let tmpMidY = (Math.min.apply(null, tmpYs) + Math.max.apply(null, tmpYs)) / 2;
+		this._BulkPanelOp = true;
+		tmpNodes.forEach((pNode) =>
+		{
+			let tmpPanel = this._FlowView.openPanel(pNode.Hash);
+			if (!tmpPanel) { return; }
+			tmpPanel.X = pNode.X - 30;
+			tmpPanel.Y = (pNode.Y <= tmpMidY) ? (pNode.Y - (tmpPanel.Height || 250) - 40) : (pNode.Y + (pNode.Height || 70) + 40);
+		});
+		this._BulkPanelOp = false;
+		this._FlowView.renderFlow();
+	}
+
+	_closeAllPanels()
+	{
+		if (!this._FlowView) { return; }
+		this._BulkPanelOp = true;
+		(this._FlowView.flowData.OpenPanels || []).slice().forEach((pPanel) => { this._FlowView.closePanel(pPanel.Hash); });
+		this._BulkPanelOp = false;
 	}
 
 	saveCurrentLayout()
@@ -445,11 +645,12 @@ class PictViewWorkflowMap extends libPictView
 	{
 		let tmpFlow = this._FlowView.getFlowData();
 		// The transition panel edits the guard as JSON text (_GuardText); fold it back into the
-		// structured Data.Guard before reading the definition. Invalid JSON becomes a guard the
-		// engine rejects, so the save surfaces a clear error rather than silently dropping it.
-		(tmpFlow.Connections || []).forEach((pConnection) =>
+		// structured Data.Guard on each transition node before reading the definition. Invalid JSON
+		// becomes a guard the engine rejects, so the save surfaces a clear error.
+		(tmpFlow.Nodes || []).forEach((pNode) =>
 		{
-			let tmpData = pConnection.Data || {};
+			if (pNode.Type !== libDefinitionFlow.TRANSITION_NODE_TYPE) { return; }
+			let tmpData = pNode.Data || {};
 			if (Object.prototype.hasOwnProperty.call(tmpData, '_GuardText'))
 			{
 				let tmpText = String(tmpData._GuardText || '').trim();
@@ -460,30 +661,33 @@ class PictViewWorkflowMap extends libPictView
 		return libDefinitionFlow.flowToDefinition(tmpFlow, this._Meta);
 	}
 
+	// Save only state positions; transition cards center themselves between their states on load.
 	_collectLayout()
 	{
 		let tmpFlow = this._FlowView.getFlowData();
 		let tmpLayout = {};
 		(tmpFlow.Nodes || []).forEach((pNode) =>
 		{
+			if (pNode.Type === libDefinitionFlow.TRANSITION_NODE_TYPE) { return; }
 			let tmpKey = (pNode.Data && pNode.Data.Key) || pNode.Hash;
 			tmpLayout[tmpKey] = { X: pNode.X, Y: pNode.Y };
 		});
 		return tmpLayout;
 	}
 
-	// Repaint after a panel closes: recolor lanes (a state may have changed lane), re-render the
-	// graph (titles/colors), refresh autocomplete, and mark dirty.
+	// Repaint after a panel closes: recolor lanes (a state may have changed lane), re-stamp the
+	// transition cards (titles + From/To), re-render, refresh autocomplete, and mark dirty.
 	_afterPanelEdit()
 	{
+		if (this._BulkPanelOp) { return; }
 		this._recolorLanes();
-		this._stampConnectionDisplayFields();
+		this._stampTransitionDisplayFields();
 		this._refreshOptionLists();
 		if (this._FlowView) { this._FlowView.renderFlow(); }
 		this._markDirty();
 	}
 
-	// After a lane edit, recolor every node so a lane keeps one consistent color.
+	// After a lane edit, recolor every state so a lane keeps one consistent color.
 	_recolorLanes()
 	{
 		if (!this._FlowView) { return; }
@@ -491,28 +695,45 @@ class PictViewWorkflowMap extends libPictView
 		let tmpColors = libDefinitionFlow.laneColors(tmpDefinition);
 		(this._FlowView.flowData.Nodes || []).forEach((pNode) =>
 		{
+			if (pNode.Type === libDefinitionFlow.TRANSITION_NODE_TYPE) { return; }
 			let tmpLane = (pNode.Data && pNode.Data.Lane) || (pNode.Data && pNode.Data.Key) || pNode.Hash;
 			if (tmpColors[tmpLane]) { pNode.TitleBarColor = tmpColors[tmpLane]; }
 		});
 	}
 
-	// Stamp transient display fields onto each connection so the transition panel can show the
-	// From/To names and the guard as JSON. flowToDefinition ignores these (it reads From/To from
-	// the wires and the guard from Data.Guard), so they never reach the saved definition.
-	_stampConnectionDisplayFields()
+	// Give each transition card the names of the states it joins (for its panel header) and a title
+	// showing its gate, and seed the guard JSON text. These are display-only; flowToDefinition reads
+	// From/To from the edges and the guard from Data.Guard, so none of this reaches the definition.
+	_stampTransitionDisplayFields()
 	{
 		if (!this._FlowView) { return; }
+		let tmpNodes = this._FlowView.flowData.Nodes || [];
+		let tmpConnections = this._FlowView.flowData.Connections || [];
 		let tmpNameByHash = {};
-		(this._FlowView.flowData.Nodes || []).forEach((pNode) => { tmpNameByHash[pNode.Hash] = pNode.Title || ((pNode.Data && pNode.Data.Key) || pNode.Hash); });
-		(this._FlowView.flowData.Connections || []).forEach((pConnection) =>
+		let tmpIsTransition = {};
+		tmpNodes.forEach((pNode) =>
 		{
-			if (!pConnection.Data) { pConnection.Data = {}; }
-			pConnection.Data._FromName = tmpNameByHash[pConnection.SourceNodeHash] || '?';
-			pConnection.Data._ToName = tmpNameByHash[pConnection.TargetNodeHash] || '?';
-			if (!Object.prototype.hasOwnProperty.call(pConnection.Data, '_GuardText'))
+			tmpNameByHash[pNode.Hash] = pNode.Title || ((pNode.Data && pNode.Data.Key) || pNode.Hash);
+			if (pNode.Type === libDefinitionFlow.TRANSITION_NODE_TYPE) { tmpIsTransition[pNode.Hash] = true; }
+		});
+		let tmpIncoming = {};
+		let tmpOutgoing = {};
+		tmpConnections.forEach((pConnection) =>
+		{
+			if (tmpIsTransition[pConnection.TargetNodeHash]) { tmpIncoming[pConnection.TargetNodeHash] = pConnection.SourceNodeHash; }
+			if (tmpIsTransition[pConnection.SourceNodeHash]) { tmpOutgoing[pConnection.SourceNodeHash] = pConnection.TargetNodeHash; }
+		});
+		tmpNodes.forEach((pNode) =>
+		{
+			if (pNode.Type !== libDefinitionFlow.TRANSITION_NODE_TYPE) { return; }
+			if (!pNode.Data) { pNode.Data = {}; }
+			pNode.Data._FromName = tmpNameByHash[tmpIncoming[pNode.Hash]] || '(unwired)';
+			pNode.Data._ToName = tmpNameByHash[tmpOutgoing[pNode.Hash]] || '(unwired)';
+			if (!Object.prototype.hasOwnProperty.call(pNode.Data, '_GuardText'))
 			{
-				pConnection.Data._GuardText = pConnection.Data.Guard ? JSON.stringify(pConnection.Data.Guard, null, 2) : '';
+				pNode.Data._GuardText = pNode.Data.Guard ? JSON.stringify(pNode.Data.Guard, null, 2) : '';
 			}
+			pNode.Title = libDefinitionFlow.transitionTitle(pNode.Data);
 		});
 	}
 

@@ -25,8 +25,9 @@ module.exports =
 	MetricsFormat: libCore.MetricsFormat,
 	WorkflowClient: libCore.WorkflowClient,
 
-	// The node card and the four views.
+	// The node cards and the four views.
 	StateCard: require('./cards/State-Card.js'),
+	TransitionCard: require('./cards/Transition-Card.js'),
 	WorkflowMapView: require('./views/PictView-Workflow-Map.js'),
 	WorkflowBoardView: require('./views/PictView-Workflow-Board.js'),
 	WorkflowSubjectView: require('./views/PictView-Workflow-Subject.js'),

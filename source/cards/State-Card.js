@@ -35,6 +35,8 @@ class StateCard extends libPictFlowCard
 				Description: 'A state in the workflow. Incoming transitions arrive at In; outgoing transitions leave from Out.',
 				Category: 'Workflow',
 				TitleBarColor: '#3d6fb4',
+				Icon: 'WorkflowState',
+				CornerRadius: 5,
 				Width: 190,
 				Height: 70,
 				Inputs:

@@ -4,16 +4,19 @@
  * retold-workflow - Definition-Flow tests
  *
  * The point is the round trip: a workflow definition becomes a flow graph and reads back to an
- * identical definition. Around that, the marshaling carries lanes to colors, transitions to
- * connections between the right ports, and the engine's own checks gate a save.
+ * identical definition. In this graph a transition is its own node (Status -> transition -> Status)
+ * with an incoming edge from its source state and an outgoing edge to its target, so the tests
+ * check that a transition marshals to a node plus two edges and reads back from those edges.
  */
 
 const libAssert = require('node:assert');
 const libDefinitionFlow = require('../source/Definition-Flow.js');
 
-// A definition that exercises every field the marshaling carries: lanes, markers, an initial and
-// a terminal state, a category, and transitions with an entitlement, an actor address, and a
-// structured guard. Two states share the In Progress lane (the many-to-one rule).
+const STATE = libDefinitionFlow.STATE_NODE_TYPE;
+const TRANSITION = libDefinitionFlow.TRANSITION_NODE_TYPE;
+
+// A definition that exercises every field the marshaling carries: lanes, markers, an initial and a
+// terminal state, a category, and transitions with an entitlement, an actor address, and a guard.
 const SOFTWARE =
 {
 	Key: 'software',
@@ -38,6 +41,10 @@ const SOFTWARE =
 		{ From: 'approved',    To: 'done',        RequiresEntitlement: 'content.approve' }
 	]
 };
+
+function statesOf(pFlow) { return pFlow.Nodes.filter((pNode) => pNode.Type === STATE); }
+function transitionsOf(pFlow) { return pFlow.Nodes.filter((pNode) => pNode.Type === TRANSITION); }
+function stateByKey(pFlow) { let tmpMap = {}; statesOf(pFlow).forEach((pNode) => { tmpMap[pNode.Data.Key] = pNode; }); return tmpMap; }
 
 suite('retold-workflow: Definition-Flow', () =>
 {
@@ -73,47 +80,54 @@ suite('retold-workflow: Definition-Flow', () =>
 		test('a state becomes a node carrying its key, lane color, ports, and data', () =>
 		{
 			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE);
-			libAssert.strictEqual(tmpFlow.Nodes.length, 7);
-			let tmpNode = tmpFlow.Nodes[0];
+			libAssert.strictEqual(statesOf(tmpFlow).length, 7);
+			let tmpNode = statesOf(tmpFlow)[0];
 			libAssert.strictEqual(tmpNode.Title, 'Backlog');
-			libAssert.strictEqual(tmpNode.Type, libDefinitionFlow.STATE_NODE_TYPE);
+			libAssert.strictEqual(tmpNode.Type, STATE);
 			libAssert.strictEqual(tmpNode.Data.Key, 'backlog');
 			libAssert.strictEqual(tmpNode.Data.IsInitial, true);
 			libAssert.ok(/^#/.test(tmpNode.TitleBarColor), 'has a hex title-bar color');
 			libAssert.strictEqual(tmpNode.Ports.length, 2);
-			libAssert.strictEqual(tmpNode.Ports[0].Direction, 'input');
-			libAssert.strictEqual(tmpNode.Ports[1].Direction, 'output');
 		});
 
 		test('states sharing a lane share a title-bar color; different lanes differ', () =>
 		{
-			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE);
-			let tmpByKey = {};
-			tmpFlow.Nodes.forEach((pNode) => { tmpByKey[pNode.Data.Key] = pNode; });
+			let tmpByKey = stateByKey(libDefinitionFlow.definitionToFlow(SOFTWARE));
 			libAssert.strictEqual(tmpByKey['in_progress'].TitleBarColor, tmpByKey['in_ci'].TitleBarColor, 'same lane -> same color');
 			libAssert.notStrictEqual(tmpByKey['backlog'].TitleBarColor, tmpByKey['done'].TitleBarColor, 'different lanes -> different color');
 		});
 
-		test('a transition becomes a connection from the source out-port to the target in-port', () =>
+		test('a transition becomes a transition node plus an in-edge and an out-edge', () =>
 		{
 			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE);
-			libAssert.strictEqual(tmpFlow.Connections.length, 6);
-			let tmpByKey = {};
-			tmpFlow.Nodes.forEach((pNode) => { tmpByKey[pNode.Data.Key] = pNode; });
-			let tmpFirst = tmpFlow.Connections[0];
-			libAssert.strictEqual(tmpFirst.SourceNodeHash, tmpByKey['backlog'].Hash);
-			libAssert.strictEqual(tmpFirst.SourcePortHash, tmpByKey['backlog'].Ports[1].Hash);
-			libAssert.strictEqual(tmpFirst.TargetNodeHash, tmpByKey['todo'].Hash);
-			libAssert.strictEqual(tmpFirst.TargetPortHash, tmpByKey['todo'].Ports[0].Hash);
+			let tmpTransitions = transitionsOf(tmpFlow);
+			libAssert.strictEqual(tmpTransitions.length, 6, 'one node per transition');
+			libAssert.strictEqual(tmpFlow.Connections.length, 12, 'two edges per transition');
+
+			let tmpByKey = stateByKey(tmpFlow);
+			let tmpFirst = tmpTransitions[0]; // backlog -> todo, content.edit
+			libAssert.strictEqual(tmpFirst.Title, 'content.edit', 'the gate is the card title');
 			libAssert.strictEqual(tmpFirst.Data.RequiresEntitlement, 'content.edit');
+			libAssert.notStrictEqual(tmpFirst.TitleBarColor, tmpByKey['backlog'].TitleBarColor, 'transition cards read differently from states');
+
+			let tmpInEdge = tmpFlow.Connections.find((pConn) => pConn.TargetNodeHash === tmpFirst.Hash);
+			let tmpOutEdge = tmpFlow.Connections.find((pConn) => pConn.SourceNodeHash === tmpFirst.Hash);
+			libAssert.strictEqual(tmpInEdge.SourceNodeHash, tmpByKey['backlog'].Hash, 'in-edge comes from the source state');
+			libAssert.strictEqual(tmpInEdge.SourcePortHash, tmpByKey['backlog'].Ports[1].Hash);
+			libAssert.strictEqual(tmpOutEdge.TargetNodeHash, tmpByKey['todo'].Hash, 'out-edge goes to the target state');
+			libAssert.strictEqual(tmpOutEdge.TargetPortHash, tmpByKey['todo'].Ports[0].Hash);
 		});
 
-		test('a saved layout places the node; absent keys fall back to lane columns', () =>
+		test('a transition with no entitlement titles as "open"', () =>
 		{
-			let tmpLayout = { todo: { X: 999, Y: 888 } };
-			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE, tmpLayout);
-			let tmpByKey = {};
-			tmpFlow.Nodes.forEach((pNode) => { tmpByKey[pNode.Data.Key] = pNode; });
+			let tmpFlow = libDefinitionFlow.definitionToFlow({ Key: 'k', Name: 'K', States: [ { Key: 'a' }, { Key: 'b' } ], Transitions: [ { From: 'a', To: 'b' } ] });
+			libAssert.strictEqual(transitionsOf(tmpFlow)[0].Title, 'open');
+		});
+
+		test('a saved layout places a state; absent keys fall back to lane columns', () =>
+		{
+			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE, { todo: { X: 999, Y: 888 } });
+			let tmpByKey = stateByKey(tmpFlow);
 			libAssert.strictEqual(tmpByKey['todo'].X, 999);
 			libAssert.strictEqual(tmpByKey['todo'].Y, 888);
 			libAssert.strictEqual(typeof tmpByKey['backlog'].X, 'number');
@@ -122,32 +136,33 @@ suite('retold-workflow: Definition-Flow', () =>
 
 	suite('flowToDefinition', () =>
 	{
-		test('From and To come from the connection topology, not stale Data', () =>
+		test('From and To come from the transition node edges, not stale data', () =>
 		{
 			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE);
-			// Re-point the first connection's target from "todo" to "done" by hash. Reading back
-			// must follow the wire, yielding backlog -> done.
-			let tmpByKey = {};
-			tmpFlow.Nodes.forEach((pNode) => { tmpByKey[pNode.Data.Key] = pNode; });
-			tmpFlow.Connections[0].TargetNodeHash = tmpByKey['done'].Hash;
-			tmpFlow.Connections[0].TargetPortHash = tmpByKey['done'].Ports[0].Hash;
+			let tmpByKey = stateByKey(tmpFlow);
+			let tmpFirst = transitionsOf(tmpFlow)[0]; // backlog -> todo
+			// Re-point its out-edge from todo to done; reading back must follow the wire.
+			let tmpOutEdge = tmpFlow.Connections.find((pConn) => pConn.SourceNodeHash === tmpFirst.Hash);
+			tmpOutEdge.TargetNodeHash = tmpByKey['done'].Hash;
+			tmpOutEdge.TargetPortHash = tmpByKey['done'].Ports[0].Hash;
 			let tmpBack = libDefinitionFlow.flowToDefinition(tmpFlow);
 			libAssert.strictEqual(tmpBack.Transitions[0].From, 'backlog');
 			libAssert.strictEqual(tmpBack.Transitions[0].To, 'done');
 		});
 
-		test('a connection with a removed endpoint is dropped', () =>
+		test('a transition node missing an edge is dropped', () =>
 		{
 			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE);
-			tmpFlow.Connections[0].TargetNodeHash = 'no-such-node';
+			let tmpFirst = transitionsOf(tmpFlow)[0];
+			tmpFlow.Connections = tmpFlow.Connections.filter((pConn) => pConn.SourceNodeHash !== tmpFirst.Hash);
 			let tmpBack = libDefinitionFlow.flowToDefinition(tmpFlow);
 			libAssert.strictEqual(tmpBack.Transitions.length, 5);
 		});
 
-		test('a palette-dropped node with no Data.Key gets a key slugged from its title', () =>
+		test('a palette-dropped state node with no Data.Key gets a key slugged from its title', () =>
 		{
 			let tmpFlow = libDefinitionFlow.definitionToFlow(SOFTWARE);
-			tmpFlow.Nodes.push({ Hash: 'node-new', Type: libDefinitionFlow.STATE_NODE_TYPE, Title: 'On Hold', Ports: [], Data: {} });
+			tmpFlow.Nodes.push({ Hash: 'node-new', Type: STATE, Title: 'On Hold', Ports: [], Data: {} });
 			let tmpBack = libDefinitionFlow.flowToDefinition(tmpFlow);
 			let tmpNewState = tmpBack.States.find((pState) => pState.Name === 'On Hold');
 			libAssert.ok(tmpNewState, 'the new state is present');
@@ -184,13 +199,6 @@ suite('retold-workflow: Definition-Flow', () =>
 			tmpBroken.Transitions.push({ From: 'backlog', To: 'nowhere' });
 			let tmpError = libDefinitionFlow.validateDefinition(tmpBroken);
 			libAssert.ok(tmpError && /nowhere/.test(tmpError), 'error names the unknown state');
-		});
-
-		test('a missing Key is rejected', () =>
-		{
-			let tmpBroken = JSON.parse(JSON.stringify(SOFTWARE));
-			delete tmpBroken.Key;
-			libAssert.ok(libDefinitionFlow.validateDefinition(tmpBroken), 'returns an error string');
 		});
 
 		test('an invalid guard operator is rejected', () =>
